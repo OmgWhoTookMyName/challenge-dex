@@ -54,15 +54,15 @@ const deployYourContract: DeployFunction = async function (hre: HardhatRuntimeEn
 
   // // uncomment to init DEX on deploy:
 
-  // const dexAddress = await dex.getAddress();
-  // console.log("Approving DEX (" + dexAddress + ") to take Balloons from main account...");
-  // // If you are going to the testnet make sure your deployer account has enough ETH
-  // await balloons.approve(dexAddress, hre.ethers.parseEther("100"));
-  // console.log("INIT exchange...");
-  // await dex.init(hre.ethers.parseEther("5"), {
-  //   value: hre.ethers.parseEther("5"),
-  //   gasLimit: 200000,
-  // });
+  const dexAddress = await dex.getAddress();
+  console.log("Approving DEX (" + dexAddress + ") to take Balloons from main account...");
+  // If you are going to the testnet make sure your deployer account has enough ETH
+  await balloons.approve(dexAddress, hre.ethers.parseEther("100"));
+  console.log("INIT exchange...");
+  await dex.init(hre.ethers.parseEther("5"), {
+    value: hre.ethers.parseEther("5"),
+    gasLimit: 200000,
+  });
 };
 
 export default deployYourContract;
