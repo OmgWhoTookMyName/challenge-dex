@@ -114,7 +114,17 @@ contract DEX {
     /**
      * @notice sends $BAL tokens to DEX in exchange for Ether
      */
-    function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {}
+    function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {
+
+        //TODO: Calculate how much eth to send to sender
+        uint256 ethValue = price(tokenInput, totalLiquidity, address(this).balance);
+        //TODO: First transfer the tokens from the sender
+        token.transferFrom(msg.sender, address(this), tokenInput);
+
+        (bool sent,) = msg.sender.call{value: ethValue}("");
+        require(sent, "Failed to send Ether");
+
+    }
 
     /**
      * @notice allows deposits of $BAL and $ETH to liquidity pool
