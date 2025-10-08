@@ -116,14 +116,17 @@ contract DEX {
      */
     function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {
 
-        //TODO: Calculate how much eth to send to sender
+        //Calculate how much eth to send to sender
         uint256 ethValue = price(tokenInput, totalLiquidity, address(this).balance);
-        //TODO: First transfer the tokens from the sender
+        //First transfer the tokens from the sender
+        //TODO: Do I need to get approval first?
         token.transferFrom(msg.sender, address(this), tokenInput);
+        totalLiquidity+=tokenInput;
 
         (bool sent,) = msg.sender.call{value: ethValue}("");
         require(sent, "Failed to send Ether");
 
+        return ethValue;
     }
 
     /**
@@ -132,7 +135,21 @@ contract DEX {
      * NOTE: user has to make sure to give DEX approval to spend their tokens on their behalf by calling approve function prior to this function call.
      * NOTE: Equal parts of both assets will be removed from the user's wallet with respect to the price outlined by the AMM.
      */
-    function deposit() public payable returns (uint256 tokensDeposited) {}
+    function deposit() public payable returns (uint256 tokensDeposited) {
+        //Calculate how much BAL should be extracted
+        uint256 tokens = price(msg.value, address(this).balance, token.balanceOf(address(this)));
+
+        token.approve(msg.sender, tokens);
+
+        token.transferFrom(msg.sender, address(this), tokens);
+
+        totalLiquidity+=tokens;
+
+        liquidity[msg.sender]+=tokens;
+
+        return tokensDeposited;
+
+    }
 
     /**
      * @notice allows withdrawal of $BAL and $ETH from liquidity pool
