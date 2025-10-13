@@ -64,13 +64,13 @@ contract DEX {
      * NOTE: since ratio is 1:1, this is fine to initialize the totalLiquidity (wrt to balloons) as equal to eth balance of contract.
      */
     function init(uint256 tokens) public payable returns (uint256) {
-        //TODO: require that the ratios are equal
+        require(totalLiquidity == 0, "Liquidity already provided");
         uint256 totalCalcLiquidity = token.balanceOf(address(this)) + tokens;
-        totalLiquidity += tokens;
         //Take balloon from sender
-        token.transferFrom(msg.sender, address(this), tokens);
-        liquidity[msg.sender] = tokens;
-        emit LiquidityProvided(msg.sender, totalCalcLiquidity, msg.value, tokens);
+        require(token.transferFrom(msg.sender, address(this), tokens),"Could not transfer tokens");
+        totalLiquidity = address(this).balance;
+        liquidity[msg.sender] = totalLiquidity;
+        emit LiquidityProvided(msg.sender, totalCalcLiquidity, msg.value, liquidity[msg.sender]);
 
         return totalLiquidity;
     }
@@ -80,12 +80,12 @@ contract DEX {
      * @dev Follow along with the [original tutorial](https://medium.com/@austin_48503/%EF%B8%8F-minimum-viable-exchange-d84f30bd0c90) Price section for an understanding of the DEX's pricing model and for a price function to add to your contract. You may need to update the Solidity syntax (e.g. use + instead of .add, * instead of .mul, etc). Deploy when you are done.
      */
     function price(uint256 xInput, uint256 xReserves, uint256 yReserves) public pure returns (uint256 yOutput) {
-        uint256 threepercent = (xInput * 3) / 1000; //calc .3% fee
-        uint256 xInputWithFee = xInput - (threepercent); //Take fee
+        uint256 threepercentOfX = (xInput * 3) / 1000; //calc 0.3% fee
+        uint256 xInputLessFee = xInput - (threepercentOfX); //Take fee
         uint256 k = xReserves * yReserves;
-        uint256 yDelta = yReserves * 1000 - (k * 1000 / (xReserves + xInputWithFee));
+        uint256 yDelta = yReserves * 1000 - (k * 1000 / (xReserves + xInputLessFee));
         uint256 yOut = yDelta / 1000;
-        console.log("Fee calculated to be: %s, after fee input: %s at a k value of: %s", threepercent, xInputWithFee, k);
+        console.log("Fee calculated to be: %s, after fee input: %s at a k value of: %s", threepercentOfX, xInputLessFee, k);
         return yOut;
     }
 
@@ -103,10 +103,11 @@ contract DEX {
      * @notice sends Ether to DEX in exchange for $BAL
      */
     function ethToToken() public payable returns (uint256 tokenOutput) {
+        require(msg.value > 0, "Must input some eth");
 
-        uint256 buyableTokens = price(msg.value, address(this).balance, token.balanceOf(address(this)));
+        uint256 buyableTokens = price(msg.value, address(this).balance - msg.value, token.balanceOf(address(this)));
 
-        token.transfer(msg.sender, buyableTokens);
+        require(token.transfer(msg.sender, buyableTokens),"Unable to swap");
         emit EthToTokenSwap(msg.sender, buyableTokens, msg.value);
         return buyableTokens;
     }
@@ -116,16 +117,19 @@ contract DEX {
      */
     function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {
 
+        require(tokenInput > 0, "Must supply some tokens");
         //Calculate how much eth to send to sender
-        uint256 ethValue = price(tokenInput, totalLiquidity, address(this).balance);
+        uint256 ethValue = price(tokenInput, token.balanceOf(address(this)), address(this).balance);
         //First transfer the tokens from the sender
-        //TODO: Do I need to get approval first?
-        token.transferFrom(msg.sender, address(this), tokenInput);
-        totalLiquidity+=tokenInput;
+        uint256 allowedTokens = token.allowance(msg.sender, address(this));
+        require(allowedTokens >= tokenInput,"Not enough token allowance");
+        require(token.transferFrom(msg.sender, address(this), tokenInput), "Could not take tokens from user");
+        totalLiquidity += tokenInput;
 
         (bool sent,) = msg.sender.call{value: ethValue}("");
         require(sent, "Failed to send Ether");
 
+        emit TokenToEthSwap(msg.sender, tokenInput, ethValue);
         return ethValue;
     }
 
@@ -136,18 +140,30 @@ contract DEX {
      * NOTE: Equal parts of both assets will be removed from the user's wallet with respect to the price outlined by the AMM.
      */
     function deposit() public payable returns (uint256 tokensDeposited) {
+        
+        require(msg.value > 0, "Must deposit some ETH");
         //Calculate how much BAL should be extracted
-        uint256 tokens = price(msg.value, address(this).balance, token.balanceOf(address(this)));
+        //First we need eth reserve pre deposit from this transaction
+        uint256 ethRes = address(this).balance - msg.value;
+        //This is just the ratio that the market maker set when they set-up the pool
+        //However this ratio can change based on buys and sells of the token
+        uint256 tokens = ((msg.value * token.balanceOf(address(this))) / ethRes) + 1;
 
-        token.approve(msg.sender, tokens);
+        //Check to make sure user has set-up allowances
+        uint256 allowed = token.allowance(msg.sender, address(this));
 
-        token.transferFrom(msg.sender, address(this), tokens);
+        require(allowed >= tokens, "Insufficient allowance");
 
-        totalLiquidity+=tokens;
+        require(token.transferFrom(msg.sender, address(this), tokens), "Could not transfer tokens from user");
 
-        liquidity[msg.sender]+=tokens;
+        //Every set of new pairs contributes 1 liquidity that mints
+        uint lptMint = msg.value * totalLiquidity / ethRes;
+        totalLiquidity += lptMint;
+        liquidity[msg.sender] += lptMint;
 
-        return tokensDeposited;
+        emit LiquidityProvided(msg.sender, lptMint, msg.value, tokens);
+
+        return tokens;
 
     }
 
@@ -155,5 +171,26 @@ contract DEX {
      * @notice allows withdrawal of $BAL and $ETH from liquidity pool
      * NOTE: with this current code, the msg caller could end up getting very little back if the liquidity is super low in the pool. I guess they could see that with the UI.
      */
-    function withdraw(uint256 amount) public returns (uint256 ethAmount, uint256 tokenAmount) {}
+    function withdraw(uint256 amount) public returns (uint256 ethAmount, uint256 tokenAmount) {
+
+
+        //Should be able to withdraw based on LPT a user has
+        //Get users LPT
+        uint256 userLpt = getLiquidity(msg.sender);
+
+        require(amount <= userLpt, "User cannot withdraw more than is owned");
+
+        uint256 ethTotal = amount * (address(this).balance / token.balanceOf(address(this)));
+
+        uint256 tokenTotal = amount * (token.balanceOf(address(this)) / address(this).balance);
+
+        totalLiquidity -= amount;
+        liquidity[msg.sender] -= amount;
+
+        require(token.transfer(msg.sender, tokenTotal), "Unable to complete token transfer to user");
+        (bool sent,) = msg.sender.call{value: ethTotal}("");
+        require(sent, "Failed to send Ether");
+        emit LiquidityRemoved(msg.sender, amount, tokenTotal, ethTotal);
+        return (ethTotal, tokenTotal);
+    }
 }
